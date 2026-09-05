@@ -1,0 +1,21 @@
+{
+  "name": "apex-mocks-toolkit",
+  "version": "2.0.0",
+  "description": "Salesforce.com (SFDC) Apex mocking library comparison for unit tests, extended with a CRUD mocking toolkit (Unit of Work, native StubProvider benchmark)",
+  "main": "index.js",
+  "scripts": {
+    "test": "sh test.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "<add-your-repository-url-here>"
+  },
+  "author": "amitgrazitti@gmail.com",
+  "contributors": ["james.simone (original benchmark author)"],
+  "license": "MIT",
+  "devDependencies": {
+    "sfdx-cli": "latest",
+    "prettier-plugin-apex": "latest",
+    "prettier": "latest"
+  }
+}
