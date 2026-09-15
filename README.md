@@ -73,6 +73,42 @@ This whole project exists because fflib mocking once ran a transaction into `Sys
 
 The original benchmark methodology was "run the tests, eyeball the debug log" (that's literally how the Run 1–10 tables below were produced). [`Stopwatch`](src/classes/Stopwatch.cls) wraps `Limits.getCpuTime()` so a test can report a number instead: `start()`/`stop()`, then `getElapsedCpuTimeMillis()`. `ApexMocksTests.cls` now has `it_should_report_cpu_time_for_crudmock_vs_fflib_side_by_side`, which measures both approaches with it directly. Covered by [`Stopwatch_Tests.cls`](src/classes/Stopwatch_Tests.cls).
 
+## Custom additions (round 3)
+
+A third pass — covering the two remaining "hard to test" surfaces (outbound callouts, Platform Events), a factory tying every mock together, and a couple of composable patterns for validation and business rules.
+
+### `ICallout` / `Callout` / `CalloutMock` — the third native mocking story
+
+DML has `ICrud`/`CrudMock`, queries have `ISelector`/`SelectorMock` — [`ICallout`](src/classes/ICallout.cls)/[`Callout`](src/classes/Callout.cls) complete the trio for outbound HTTP callouts. [`CalloutMock`](src/classes/CalloutMock.cls) configures canned `HttpResponse`s per endpoint (or a catch-all default) and records every sent request, with no `Test.setMock`/`HttpCalloutMock` ceremony needed in consuming code — a real callout never happens when the mock is used. `Callout` itself (the real implementation) is still tested the standard Apex way, with `Test.setMock`. Covered by [`Callout_Tests.cls`](src/classes/Callout_Tests.cls) and [`CalloutMock_Tests.cls`](src/classes/CalloutMock_Tests.cls).
+
+### `Application` — one place every mock gets swapped
+
+Until now, mocking anything meant manually injecting `CrudMock`/`SelectorMock`/etc. into each constructor by hand. [`Application`](src/classes/Application.cls) is a small factory/service-locator (the same idea fflib calls `Application`): `Application.Crud.newInstance()`, `Application.Selector.newInstance(Account.SObjectType)`, `Application.Callout.newInstance()`, `Application.UnitOfWork.newInstance()`, and `Application.EventPublisher.newInstance()` return the real implementation by default, or a test-configured mock (`Application.Crud.setMock(new CrudMock())`) when one's been set. `LeadTriggerHandler`'s default constructor now goes through `Application.UnitOfWork.newInstance()` instead of `new UnitOfWork()` directly, so this isn't just theoretical. Covered by [`Application_Tests.cls`](src/classes/Application_Tests.cls).
+
+### `IDomain` / `Domain` — completing the Service/Domain/Selector trio
+
+[`Domain`](src/classes/Domain.cls) is the classic `fflib_SObjectDomain` idea, kept to one method: subclasses wrap a `List<SObject>` of one type and implement `validateRecord()`; `validate()` collects every error across every record and throws once with a combined message, rather than failing on the first bad record. [`LeadsDomain`](src/classes/LeadsDomain.cls) is the worked example (a Lead needs a `Company`). It's intentionally **not** wired into `LeadTriggerHandler` this round — throwing a bare exception from a trigger produces an ugly unhandled error rather than a clean validation message (real usage would call `SObject.addError()` instead), and composing that properly felt like its own follow-up rather than something to bolt on here. Covered by [`LeadsDomain_Tests.cls`](src/classes/LeadsDomain_Tests.cls).
+
+### `IValidationRule` / `Validator` — composable rules, a different axis than `Domain`
+
+Where `Domain` is one hardcoded class per SObject type, [`IValidationRule`](src/classes/IValidationRule.cls)/[`Validator`](src/classes/Validator.cls) is a runtime rule list that mixes and matches across *any* type. [`RequiredFieldRule`](src/classes/RequiredFieldRule.cls) is the one rule provided — `new RequiredFieldRule(Lead.Company)` works identically against `Lead`, `Account`, or any other SObject, which is the whole point of pulling rules out into their own reusable classes instead of hardcoding them per domain. Covered by [`Validator_Tests.cls`](src/classes/Validator_Tests.cls) and [`RequiredFieldRule_Tests.cls`](src/classes/RequiredFieldRule_Tests.cls).
+
+### `IEventPublisher` / `EventPublisher` / `EventPublisherMock` — mockable Platform Events
+
+Testing Platform Event publishers in Apex is a known pain point (`Test.getEventBus().deliver()` gymnastics). [`EventPublisher`](src/classes/EventPublisher.cls) wraps `EventBus.publish()` behind [`IEventPublisher`](src/classes/IEventPublisher.cls), mirroring `ICrud`; [`EventPublisherMock`](src/classes/EventPublisherMock.cls) records published events in memory instead. This is also the first non-Apex-class metadata in the repo: a real Platform Event, [`Lead_Assigned__e`](src/objects/Lead_Assigned__e.object) (`Lead_Id__c`, `Assignee_Id__c`), so `EventPublisher_Tests.cls` can publish for real rather than only against a mock. `package.xml` now also declares the `CustomObject` metadata type. Covered by [`EventPublisher_Tests.cls`](src/classes/EventPublisher_Tests.cls) and [`EventPublisherMock_Tests.cls`](src/classes/EventPublisherMock_Tests.cls).
+
+### `QueueableChainer` — giving `GovernorLimitGuard` a real caller
+
+The *original* benchmark's stated motivation was "batch processes / queueable tasks which process large numbers of records," but nothing in the toolkit demonstrated chaining Queueables safely. [`QueueableChainer`](src/classes/QueueableChainer.cls) is a `Queueable` base class whose `execute()` runs the current link (`run()`), then only enqueues the next one (`getNext()`) if [`GovernorLimitGuard.throwIfQueueableJobsNear(90)`](src/classes/GovernorLimitGuard.cls) confirms there's headroom — otherwise it calls `onChainStopped()` instead of risking a `System.LimitException: Too many queueable jobs added`. `GovernorLimitGuard` picked up `getQueueableJobsPercentUsed()`/`throwIfQueueableJobsNear()` alongside its existing DML/query/CPU/heap checks to support this. Covered by [`QueueableChainer_Tests.cls`](src/classes/QueueableChainer_Tests.cls).
+
+### Verified with a real Apex parser, not just reviewed by hand
+
+`prettier-plugin-apex` (already a devDependency, previously unused — see CI below) turned out to be more than a formatter: it's built on a real Apex parser, and running it against every class in this repo caught a genuine, previously-undetected compile error — `GovernorLimitGuard.percentUsed` had a parameter named `limit`, which is a reserved word in Apex (part of the SOQL `LIMIT` clause grammar). That's now fixed, and every one of the 62 Apex files in this repo (61 classes + the trigger) has been confirmed to actually parse. The whole codebase was also run through `prettier --write` to match the `.prettierrc` this repo already declared but never used.
+
+### CI — actually running the Prettier config that was just sitting there
+
+`package.json` has listed `prettier-plugin-apex` as a devDependency since the very first commit, with a `.prettierrc` alongside it, but nothing ever ran it. [`.github/workflows/ci.yml`](.github/workflows/ci.yml) now runs `prettier --check` against every `.cls`/`.trigger` file on every push and PR to `master`. It installs Prettier with `--ignore-scripts` rather than a plain `npm install`, since this repo's `sfdx-cli` devDependency's postinstall script isn't needed for a formatting check and has been observed to fail in some environments.
+
 ---
 
 ## Original benchmark write-up (by James Simone)

@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  format-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # --ignore-scripts avoids running this repo's sfdx-cli devDependency's
+      # postinstall script, which isn't needed for a formatting check and
+      # has been observed to fail in some environments. prettier-plugin-apex
+      # spawns its own parser subprocess and needs to be resolved from a
+      # real node_modules alongside the files it checks, so it's installed
+      # here rather than in an isolated directory.
+      - run: npm install --no-save --ignore-scripts prettier prettier-plugin-apex
+      - run: npx prettier --plugin=prettier-plugin-apex --check "src/**/*.{cls,trigger}"

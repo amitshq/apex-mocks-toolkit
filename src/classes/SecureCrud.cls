@@ -9,53 +9,54 @@
  * getLastAccessDecision() so callers/tests can inspect what was stripped.
  */
 public virtual class SecureCrud extends Crud {
-    @testVisible
-    private SObjectAccessDecision lastAccessDecision;
+  @testVisible
+  private SObjectAccessDecision lastAccessDecision;
 
-    public SObjectAccessDecision getLastAccessDecision() {
-        return this.lastAccessDecision;
+  public SObjectAccessDecision getLastAccessDecision() {
+    return this.lastAccessDecision;
+  }
+
+  public override List<SObject> doInsert(List<SObject> records) {
+    return super.doInsert(this.stripInaccessibleFields(System.AccessType.CREATABLE, records));
+  }
+
+  public override List<SObject> doUpdate(List<SObject> records) {
+    return super.doUpdate(this.stripInaccessibleFields(System.AccessType.UPDATABLE, records));
+  }
+
+  public override List<SObject> doUpsert(List<SObject> records) {
+    return super.doUpsert(this.stripInaccessibleFields(System.AccessType.UPSERTABLE, records));
+  }
+
+  public override List<SObject> doUpsert(List<SObject> records, Schema.SObjectField externalIdField) {
+    return super.doUpsert(this.stripInaccessibleFields(System.AccessType.UPSERTABLE, records), externalIdField);
+  }
+
+  public override void doDelete(List<SObject> records) {
+    this.enforceObjectIsDeletable(records);
+    super.doDelete(records);
+  }
+
+  public override void doHardDelete(List<SObject> records) {
+    this.enforceObjectIsDeletable(records);
+    super.doHardDelete(records);
+  }
+
+  private List<SObject> stripInaccessibleFields(System.AccessType accessType, List<SObject> records) {
+    this.lastAccessDecision = Security.stripInaccessible(accessType, records);
+    return this.lastAccessDecision.getRecords();
+  }
+
+  private void enforceObjectIsDeletable(List<SObject> records) {
+    Set<Schema.SObjectType> checkedTypes = new Set<Schema.SObjectType>();
+    for (SObject record : records) {
+      Schema.SObjectType sObjectType = record.getSObjectType();
+      if (checkedTypes.add(sObjectType) && sObjectType.getDescribe().isDeletable() == false) {
+        throw new SecureCrudException('Insufficient permissions to delete ' + sObjectType);
+      }
     }
+  }
 
-    public override List<SObject> doInsert(List<SObject> records) {
-        return super.doInsert(this.stripInaccessibleFields(System.AccessType.CREATABLE, records));
-    }
-
-    public override List<SObject> doUpdate(List<SObject> records) {
-        return super.doUpdate(this.stripInaccessibleFields(System.AccessType.UPDATABLE, records));
-    }
-
-    public override List<SObject> doUpsert(List<SObject> records) {
-        return super.doUpsert(this.stripInaccessibleFields(System.AccessType.UPSERTABLE, records));
-    }
-
-    public override List<SObject> doUpsert(List<SObject> records, Schema.SObjectField externalIdField) {
-        return super.doUpsert(this.stripInaccessibleFields(System.AccessType.UPSERTABLE, records), externalIdField);
-    }
-
-    public override void doDelete(List<SObject> records) {
-        this.enforceObjectIsDeletable(records);
-        super.doDelete(records);
-    }
-
-    public override void doHardDelete(List<SObject> records) {
-        this.enforceObjectIsDeletable(records);
-        super.doHardDelete(records);
-    }
-
-    private List<SObject> stripInaccessibleFields(System.AccessType accessType, List<SObject> records) {
-        this.lastAccessDecision = Security.stripInaccessible(accessType, records);
-        return this.lastAccessDecision.getRecords();
-    }
-
-    private void enforceObjectIsDeletable(List<SObject> records) {
-        Set<Schema.SObjectType> checkedTypes = new Set<Schema.SObjectType>();
-        for(SObject record : records) {
-            Schema.SObjectType sObjectType = record.getSObjectType();
-            if(checkedTypes.add(sObjectType) && sObjectType.getDescribe().isDeletable() == false) {
-                throw new SecureCrudException('Insufficient permissions to delete ' + sObjectType);
-            }
-        }
-    }
-
-    public class SecureCrudException extends Exception {}
+  public class SecureCrudException extends Exception {
+  }
 }

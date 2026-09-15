@@ -1,118 +1,117 @@
 @isTest
 private class ApexMocksTests {
-    private static Integer LARGE_NUMBER = 10000;
+  private static Integer LARGE_NUMBER = 10000;
 
-    @isTest
-    static void fflib_should_mock_dml_statements_update() {
-        // Given
-        fflib_ApexMocks mocks = new fflib_ApexMocks();
-        ICrud mockCrud = (ICrud)mocks.mock(Crud.class);
-        Account fakeAccount = new Account();
+  @isTest
+  static void fflib_should_mock_dml_statements_update() {
+    // Given
+    fflib_ApexMocks mocks = new fflib_ApexMocks();
+    ICrud mockCrud = (ICrud) mocks.mock(Crud.class);
+    Account fakeAccount = new Account();
 
-        // When
-        for(Integer i = 0; i < LARGE_NUMBER; i++) {
-            mockCrud.doUpdate(fakeAccount);
-        }
-
-        // Then
-        mocks.verify(mockCrud, LARGE_NUMBER);
+    // When
+    for (Integer i = 0; i < LARGE_NUMBER; i++) {
+      mockCrud.doUpdate(fakeAccount);
     }
 
-    @isTest
-    static void crudmock_should_mock_dml_statements_update() {
-        //Given
-        ICrud mockCrud = CrudMock.getMock();
-        Account fakeAccount = new Account();
+    // Then
+    mocks.verify(mockCrud, LARGE_NUMBER);
+  }
 
-        //When
-        for(Integer i = 0; i < LARGE_NUMBER; i++) {
-            mockCrud.doUpdate(fakeAccount);
-        }
+  @isTest
+  static void crudmock_should_mock_dml_statements_update() {
+    //Given
+    ICrud mockCrud = CrudMock.getMock();
+    Account fakeAccount = new Account();
 
-        //Then
-        System.assertEquals(LARGE_NUMBER, CrudMock.Updated.size());
+    //When
+    for (Integer i = 0; i < LARGE_NUMBER; i++) {
+      mockCrud.doUpdate(fakeAccount);
     }
 
-    @isTest
-    static void nativestub_should_mock_dml_statements_update() {
-        // Given
-        CrudStubProvider provider = new CrudStubProvider();
-        ICrud mockCrud = (ICrud) Test.createStub(Crud.class, provider);
-        Account fakeAccount = new Account();
+    //Then
+    System.assertEquals(LARGE_NUMBER, CrudMock.Updated.size());
+  }
 
-        // When
-        for(Integer i = 0; i < LARGE_NUMBER; i++) {
-            mockCrud.doUpdate(fakeAccount);
-        }
+  @isTest
+  static void nativestub_should_mock_dml_statements_update() {
+    // Given
+    CrudStubProvider provider = new CrudStubProvider();
+    ICrud mockCrud = (ICrud) Test.createStub(Crud.class, provider);
+    Account fakeAccount = new Account();
 
-        // Then
-        System.assertEquals(LARGE_NUMBER, provider.callCount);
+    // When
+    for (Integer i = 0; i < LARGE_NUMBER; i++) {
+      mockCrud.doUpdate(fakeAccount);
     }
 
-    @isTest
-    static void fflib_should_mock_multiple_crud_instances() {
-        //Given
-        fflib_ApexMocks mocks = new fflib_ApexMocks();
-        ICrud mockCrudOne = (ICrud)mocks.mock(Crud.class);
-        ICrud mockCrudTwo = (ICrud)mocks.mock(Crud.class);
+    // Then
+    System.assertEquals(LARGE_NUMBER, provider.callCount);
+  }
 
-        //When
-        for(Integer i = 0; i < LARGE_NUMBER; i++) {
-            Contact fakeCon = new Contact(LastName = '' + LARGE_NUMBER);
-            mockCrudOne.doInsert(fakeCon);
-            mockCrudTwo.doUpdate(fakeCon);
-        }
+  @isTest
+  static void fflib_should_mock_multiple_crud_instances() {
+    //Given
+    fflib_ApexMocks mocks = new fflib_ApexMocks();
+    ICrud mockCrudOne = (ICrud) mocks.mock(Crud.class);
+    ICrud mockCrudTwo = (ICrud) mocks.mock(Crud.class);
 
-        //Then
-        mocks.verify(mockCrudOne, LARGE_NUMBER);
-        mocks.verify(mockCrudTwo, LARGE_NUMBER);
+    //When
+    for (Integer i = 0; i < LARGE_NUMBER; i++) {
+      Contact fakeCon = new Contact(LastName = '' + LARGE_NUMBER);
+      mockCrudOne.doInsert(fakeCon);
+      mockCrudTwo.doUpdate(fakeCon);
     }
 
-    @isTest
-    static void crudmock_should_mock_multiple_crud_instances() {
-        //Given
-        ICrud mockCrudOne = new CrudMock();
-        ICrud mockCrudTwo = new CrudMock();
+    //Then
+    mocks.verify(mockCrudOne, LARGE_NUMBER);
+    mocks.verify(mockCrudTwo, LARGE_NUMBER);
+  }
 
-        //When
-        for(Integer i = 0; i < LARGE_NUMBER; i++) {
-            Contact fakeCon = new Contact(LastName = '' + LARGE_NUMBER);
-            mockCrudOne.doInsert(fakeCon);
-            mockCrudTwo.doUpdate(fakeCon);
-        }
+  @isTest
+  static void crudmock_should_mock_multiple_crud_instances() {
+    //Given
+    ICrud mockCrudOne = new CrudMock();
+    ICrud mockCrudTwo = new CrudMock();
 
-        //Then
-        System.assertEquals(LARGE_NUMBER, CrudMock.Inserted.size());
-        System.assertEquals(LARGE_NUMBER, CrudMock.Updated.size());
+    //When
+    for (Integer i = 0; i < LARGE_NUMBER; i++) {
+      Contact fakeCon = new Contact(LastName = '' + LARGE_NUMBER);
+      mockCrudOne.doInsert(fakeCon);
+      mockCrudTwo.doUpdate(fakeCon);
     }
 
-    @isTest
-    static void it_should_report_cpu_time_for_crudmock_vs_fflib_side_by_side() {
-        // Formalizes the README's original methodology (run both, eyeball the
-        // debug log) into a number both approaches can be judged by directly.
-        Account fakeAccount = new Account();
+    //Then
+    System.assertEquals(LARGE_NUMBER, CrudMock.Inserted.size());
+    System.assertEquals(LARGE_NUMBER, CrudMock.Updated.size());
+  }
 
-        Stopwatch crudMockStopwatch = new Stopwatch().start();
-        ICrud mockCrud = CrudMock.getMock();
-        for(Integer i = 0; i < LARGE_NUMBER; i++) {
-            mockCrud.doUpdate(fakeAccount);
-        }
-        crudMockStopwatch.stop();
+  @isTest
+  static void it_should_report_cpu_time_for_crudmock_vs_fflib_side_by_side() {
+    // Formalizes the README's original methodology (run both, eyeball the
+    // debug log) into a number both approaches can be judged by directly.
+    Account fakeAccount = new Account();
 
-        Stopwatch fflibStopwatch = new Stopwatch().start();
-        fflib_ApexMocks mocks = new fflib_ApexMocks();
-        ICrud fflibMockCrud = (ICrud) mocks.mock(Crud.class);
-        for(Integer i = 0; i < LARGE_NUMBER; i++) {
-            fflibMockCrud.doUpdate(fakeAccount);
-        }
-        fflibStopwatch.stop();
-
-        System.debug(
-            LoggingLevel.INFO,
-            'CrudMock CPU ms: ' + crudMockStopwatch.getElapsedCpuTimeMillis() +
-            ' | fflib CPU ms: ' + fflibStopwatch.getElapsedCpuTimeMillis()
-        );
-        System.assert(crudMockStopwatch.getElapsedCpuTimeMillis() >= 0);
-        System.assert(fflibStopwatch.getElapsedCpuTimeMillis() >= 0);
+    Stopwatch crudMockStopwatch = new Stopwatch().start();
+    ICrud mockCrud = CrudMock.getMock();
+    for (Integer i = 0; i < LARGE_NUMBER; i++) {
+      mockCrud.doUpdate(fakeAccount);
     }
+    crudMockStopwatch.stop();
+
+    Stopwatch fflibStopwatch = new Stopwatch().start();
+    fflib_ApexMocks mocks = new fflib_ApexMocks();
+    ICrud fflibMockCrud = (ICrud) mocks.mock(Crud.class);
+    for (Integer i = 0; i < LARGE_NUMBER; i++) {
+      fflibMockCrud.doUpdate(fakeAccount);
+    }
+    fflibStopwatch.stop();
+
+    System.debug(
+      LoggingLevel.INFO,
+      'CrudMock CPU ms: ' + crudMockStopwatch.getElapsedCpuTimeMillis() + ' | fflib CPU ms: ' + fflibStopwatch.getElapsedCpuTimeMillis()
+    );
+    System.assert(crudMockStopwatch.getElapsedCpuTimeMillis() >= 0);
+    System.assert(fflibStopwatch.getElapsedCpuTimeMillis() >= 0);
+  }
 }

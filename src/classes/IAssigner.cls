@@ -4,5 +4,5 @@
  * records, choosing from assigneeIds according to their own strategy.
  */
 public interface IAssigner {
-    void assign(List<SObject> records, List<Id> assigneeIds, Schema.SObjectField ownerField);
+  void assign(List<SObject> records, List<Id> assigneeIds, Schema.SObjectField ownerField);
 }

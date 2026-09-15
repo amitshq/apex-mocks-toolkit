@@ -1,1 +1,2 @@
-public class AssignerException extends Exception {}
+public class AssignerException extends Exception {
+}

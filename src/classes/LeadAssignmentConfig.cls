@@ -7,6 +7,6 @@
  * between test methods, same as CrudMock's static lists).
  */
 public class LeadAssignmentConfig {
-    @testVisible
-    public static List<Id> salesRepIds = new List<Id>();
+  @testVisible
+  public static List<Id> salesRepIds = new List<Id>();
 }

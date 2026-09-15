@@ -12,6 +12,12 @@ How to actually use each class in this toolkit. [README.md](README.md) tells the
 6. [`GovernorLimitGuard`](#6-governorlimitguard)
 7. [Benchmarking — `Stopwatch` / `CrudStubProvider`](#7-benchmarking)
 8. [Trigger framework — `TriggerHandler` / `LeadTriggerHandler` / `LeadAssignmentConfig`](#8-trigger-framework)
+9. [Callout layer — `ICallout` / `Callout` / `CalloutMock`](#9-callout-layer)
+10. [`Application` — the factory](#10-application)
+11. [Domain layer — `IDomain` / `Domain` / `LeadsDomain`](#11-domain-layer)
+12. [Validation rules — `IValidationRule` / `Validator` / `RequiredFieldRule`](#12-validation-rules)
+13. [Platform Events — `IEventPublisher` / `EventPublisher` / `EventPublisherMock`](#13-platform-events)
+14. [`QueueableChainer`](#14-queueablechainer)
 
 ---
 
@@ -349,3 +355,196 @@ insert new Lead(LastName = 'Prospect', Company = 'Acme'); // LeadTrigger fires L
 ```
 
 To swap the assignment strategy, nothing in `LeadTriggerHandler` needs to change — it depends on `IAssigner`, not `RoundRobinAssigner` specifically. If you want a different default, edit the zero-arg constructor in [`LeadTriggerHandler.cls`](src/classes/LeadTriggerHandler.cls:16).
+
+---
+
+## 9. Callout layer
+
+**Files:** [`ICallout.cls`](src/classes/ICallout.cls), [`Callout.cls`](src/classes/Callout.cls), [`CalloutMock.cls`](src/classes/CalloutMock.cls)
+
+The third native-mocking pillar alongside DML (`ICrud`) and queries (`ISelector`) — depend on `ICallout`, not `Http` directly.
+
+```apex
+ICallout callout = new Callout(); // real HTTP callout via new Http().send(request)
+
+HttpRequest request = new HttpRequest();
+request.setEndpoint('https://api.example.com/accounts');
+request.setMethod('GET');
+HttpResponse response = callout.send(request);
+```
+
+### `CalloutMock` — in-memory fake for tests
+
+```apex
+@isTest
+static void it_should_handle_a_successful_response() {
+    CalloutMock mockCallout = new CalloutMock();
+    HttpResponse canned = new HttpResponse();
+    canned.setStatusCode(200);
+    canned.setBody('{"status":"ok"}');
+    mockCallout.respondWith('https://api.example.com/accounts', canned);
+    // or: mockCallout.respondWithDefault(canned) as a catch-all for any endpoint
+
+    MyService service = new MyService(mockCallout);
+    service.syncAccounts();
+
+    System.assertEquals(1, CalloutMock.SentRequests.size());
+}
+```
+
+No `Test.setMock`/`HttpCalloutMock` needed — a real callout never happens when `CalloutMock` is used, the same way `CrudMock` never runs real DML. If no matching endpoint and no default response are configured, `send()` throws `CalloutMock.CalloutMockException` rather than returning something misleading.
+
+---
+
+## 10. `Application`
+
+**File:** [`Application.cls`](src/classes/Application.cls)
+
+A single place every mockable collaborator in this toolkit gets created from, so production code depends on `Application.X.newInstance()` instead of `new X()` directly:
+
+```apex
+public class LeadImportService {
+    private final ICrud crud;
+    private final ISelector accountsSelector;
+
+    public LeadImportService() {
+        this.crud = Application.Crud.newInstance();
+        this.accountsSelector = Application.Selector.newInstance(Account.SObjectType);
+    }
+}
+```
+
+In a test, swap every collaborator to its mock in one line each, instead of threading dependency injection through every constructor by hand:
+
+```apex
+@isTest
+static void it_should_import_leads() {
+    Application.Crud.setMock(new CrudMock());
+    Application.Selector.setMock(Account.SObjectType, new SelectorMock());
+
+    new LeadImportService().importFrom(someFile);
+
+    System.assertEquals(1, CrudMock.Inserted.size());
+}
+```
+
+Available factories: `Application.Crud`, `Application.Selector` (registered per `SObjectType` — only `Account` → `AccountsSelector` out of the box; `Application.Selector.newInstance(SomeOtherType)` throws `Application.ApplicationException` until you add a case for it), `Application.Callout`, `Application.UnitOfWork`, and `Application.EventPublisher`. Each has the same shape: `newInstance()` returns the real thing by default or a mock once `setMock(...)` is called; statics reset between test methods same as everywhere else in this toolkit.
+
+---
+
+## 11. Domain layer
+
+**Files:** [`IDomain.cls`](src/classes/IDomain.cls), [`Domain.cls`](src/classes/Domain.cls), [`LeadsDomain.cls`](src/classes/LeadsDomain.cls)
+
+The home for record-level business rules that don't belong scattered across trigger handlers (the classic `fflib_SObjectDomain` idea, kept to one method).
+
+```apex
+public class LeadsDomain extends Domain {
+    public LeadsDomain(List<SObject> records) {
+        super(records);
+    }
+
+    protected override List<String> validateRecord(SObject record) {
+        List<String> errors = new List<String>();
+        Lead lead = (Lead) record;
+        if (String.isBlank(lead.Company)) {
+            errors.add('Lead ' + lead.LastName + ' is missing a Company');
+        }
+        return errors;
+    }
+}
+```
+
+```apex
+new LeadsDomain(newLeads).validate(); // throws Domain.DomainException with every error combined, or returns silently
+```
+
+`validate()` collects every record's errors before throwing once with a combined message, rather than failing fast on the first bad record — useful when you want to report everything wrong with a batch in one shot. Note this throws a bare exception, which is appropriate for service-layer code but not directly inside a trigger (there, prefer `SObject.addError()` for a clean user-facing validation message instead of an unhandled exception).
+
+---
+
+## 12. Validation rules
+
+**Files:** [`IValidationRule.cls`](src/classes/IValidationRule.cls), [`Validator.cls`](src/classes/Validator.cls), [`RequiredFieldRule.cls`](src/classes/RequiredFieldRule.cls)
+
+A different axis of reuse than `Domain`: instead of one hardcoded class per SObject type, rules are small and standalone, and get mixed and matched at the call site across *any* type.
+
+```apex
+Validator validator = new Validator(new List<IValidationRule>{
+    new RequiredFieldRule(Lead.Company),
+    new RequiredFieldRule(Lead.LastName)
+});
+
+validator.validate(newLeads); // throws Validator.ValidatorException combining every rule's failures across every record
+```
+
+`RequiredFieldRule` works against any `SObjectField` on any type — `new RequiredFieldRule(Account.Name)` is just as valid. Write your own by implementing `IValidationRule`:
+
+```apex
+public List<String> validate(SObject record) {
+    List<String> errors = new List<String>();
+    // ... check record, add to errors ...
+    return errors;
+}
+```
+
+---
+
+## 13. Platform Events
+
+**Files:** [`IEventPublisher.cls`](src/classes/IEventPublisher.cls), [`EventPublisher.cls`](src/classes/EventPublisher.cls), [`EventPublisherMock.cls`](src/classes/EventPublisherMock.cls), [`Lead_Assigned__e`](src/objects/Lead_Assigned__e.object)
+
+Mirrors `ICrud` for the event bus — depend on `IEventPublisher`, not `EventBus` directly.
+
+```apex
+IEventPublisher publisher = new EventPublisher(); // or Application.EventPublisher.newInstance()
+
+Lead_Assigned__e event = new Lead_Assigned__e(Lead_Id__c = lead.Id, Assignee_Id__c = repId);
+publisher.publish(new List<SObject>{ event });
+```
+
+### `EventPublisherMock` — no real event bus in tests
+
+```apex
+@isTest
+static void it_should_publish_an_event_when_a_lead_is_assigned() {
+    EventPublisherMock mockPublisher = new EventPublisherMock();
+    MyService service = new MyService(mockPublisher);
+
+    service.assignAndNotify(lead, repId);
+
+    System.assertEquals(1, EventPublisherMock.PublishedEvents.size());
+}
+```
+
+`EventPublisherMock.publish()` returns an empty `List<Database.SaveResult>` rather than a fabricated one — Apex doesn't allow constructing `Database.SaveResult` directly, so assert against `EventPublisherMock.PublishedEvents`, not the return value.
+
+---
+
+## 14. `QueueableChainer`
+
+**File:** [`QueueableChainer.cls`](src/classes/QueueableChainer.cls)
+
+A `Queueable` base class that only chains itself onward if [`GovernorLimitGuard`](src/classes/GovernorLimitGuard.cls) confirms there's headroom for another queueable job — avoiding a `System.LimitException: Too many queueable jobs added` when a chain runs longer than expected.
+
+```apex
+public class LeadBackfillJob extends QueueableChainer {
+    private final List<Id> remainingLeadIds;
+
+    public LeadBackfillJob(List<Id> remainingLeadIds) {
+        this.remainingLeadIds = remainingLeadIds;
+    }
+
+    protected override void run() {
+        // process a batch of this.remainingLeadIds
+    }
+
+    protected override QueueableChainer getNext() {
+        return this.remainingLeadIds.isEmpty() ? null : new LeadBackfillJob(this.remainingLeadIds);
+    }
+}
+
+System.enqueueJob(new LeadBackfillJob(leadIds));
+```
+
+Override `onChainStopped(QueueableChainer nextThatDidNotRun)` if you want to do something (log, write a "resume from here" marker) when the chain stops early due to low headroom instead of silently dropping the remaining work.

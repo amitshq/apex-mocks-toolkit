@@ -5,21 +5,21 @@
  */
 @isTest
 public class CrudStubProvider implements System.StubProvider {
-    public Integer callCount { get; private set; }
+  public Integer callCount { get; private set; }
 
-    public CrudStubProvider() {
-        this.callCount = 0;
-    }
+  public CrudStubProvider() {
+    this.callCount = 0;
+  }
 
-    public Object handleMethodCall(
-        Object stubbedObject,
-        String stubbedMethodName,
-        Type returnType,
-        List<Type> listOfParamTypes,
-        List<String> listOfParamNames,
-        List<Object> listOfArgs
-    ) {
-        this.callCount++;
-        return listOfArgs.isEmpty() ? null : listOfArgs[0];
-    }
+  public Object handleMethodCall(
+    Object stubbedObject,
+    String stubbedMethodName,
+    Type returnType,
+    List<Type> listOfParamTypes,
+    List<String> listOfParamNames,
+    List<Object> listOfArgs
+  ) {
+    this.callCount++;
+    return listOfArgs.isEmpty() ? null : listOfArgs[0];
+  }
 }

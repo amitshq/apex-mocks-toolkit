@@ -6,18 +6,18 @@
  * actually need.
  */
 public abstract class Selector implements ISelector {
-    public abstract Schema.SObjectType getSObjectType();
-    public abstract List<Schema.SObjectField> getSObjectFieldList();
+  public abstract Schema.SObjectType getSObjectType();
+  public abstract List<Schema.SObjectField> getSObjectFieldList();
 
-    public virtual List<SObject> selectById(Set<Id> recordIds) {
-        return Database.query(this.buildBaseQuery() + ' WHERE Id IN :recordIds');
-    }
+  public virtual List<SObject> selectById(Set<Id> recordIds) {
+    return Database.query(this.buildBaseQuery() + ' WHERE Id IN :recordIds');
+  }
 
-    protected virtual String buildBaseQuery() {
-        List<String> fieldNames = new List<String>();
-        for(Schema.SObjectField field : this.getSObjectFieldList()) {
-            fieldNames.add(field.getDescribe().getName());
-        }
-        return 'SELECT ' + String.join(fieldNames, ', ') + ' FROM ' + this.getSObjectType();
+  protected virtual String buildBaseQuery() {
+    List<String> fieldNames = new List<String>();
+    for (Schema.SObjectField field : this.getSObjectFieldList()) {
+      fieldNames.add(field.getDescribe().getName());
     }
+    return 'SELECT ' + String.join(fieldNames, ', ') + ' FROM ' + this.getSObjectType();
+  }
 }

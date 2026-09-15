@@ -5,32 +5,33 @@
  * getElapsedCpuTimeMillis() while still running for a live reading.
  */
 public class Stopwatch {
-    private Integer startCpuTimeMillis;
-    private Integer stopCpuTimeMillis;
-    private Boolean isRunning = false;
+  private Integer startCpuTimeMillis;
+  private Integer stopCpuTimeMillis;
+  private Boolean isRunning = false;
 
-    public Stopwatch start() {
-        this.startCpuTimeMillis = Limits.getCpuTime();
-        this.stopCpuTimeMillis = null;
-        this.isRunning = true;
-        return this;
+  public Stopwatch start() {
+    this.startCpuTimeMillis = Limits.getCpuTime();
+    this.stopCpuTimeMillis = null;
+    this.isRunning = true;
+    return this;
+  }
+
+  public Stopwatch stop() {
+    if (this.isRunning) {
+      this.stopCpuTimeMillis = Limits.getCpuTime();
+      this.isRunning = false;
     }
+    return this;
+  }
 
-    public Stopwatch stop() {
-        if(this.isRunning) {
-            this.stopCpuTimeMillis = Limits.getCpuTime();
-            this.isRunning = false;
-        }
-        return this;
+  public Integer getElapsedCpuTimeMillis() {
+    if (this.startCpuTimeMillis == null) {
+      throw new StopwatchException('Stopwatch was never started');
     }
+    Integer endCpuTimeMillis = this.isRunning ? Limits.getCpuTime() : this.stopCpuTimeMillis;
+    return endCpuTimeMillis - this.startCpuTimeMillis;
+  }
 
-    public Integer getElapsedCpuTimeMillis() {
-        if(this.startCpuTimeMillis == null) {
-            throw new StopwatchException('Stopwatch was never started');
-        }
-        Integer endCpuTimeMillis = this.isRunning ? Limits.getCpuTime() : this.stopCpuTimeMillis;
-        return endCpuTimeMillis - this.startCpuTimeMillis;
-    }
-
-    public class StopwatchException extends Exception {}
+  public class StopwatchException extends Exception {
+  }
 }
