@@ -18,6 +18,11 @@ How to actually use each class in this toolkit. [README.md](README.md) tells the
 12. [Validation rules — `IValidationRule` / `Validator` / `RequiredFieldRule`](#12-validation-rules)
 13. [Platform Events — `IEventPublisher` / `EventPublisher` / `EventPublisherMock`](#13-platform-events)
 14. [`QueueableChainer`](#14-queueablechainer)
+15. [Caching — `ICache` / `PlatformCache` / `CacheMock` / `CachedRoundRobinAssigner`](#15-caching)
+16. [`BatchBase` / `LeadReassignmentBatch`](#16-batchbase)
+17. [`WeightedRoundRobinAssigner`](#17-weightedroundrobinassigner)
+18. [`SObjectComparer`](#18-sobjectcomparer)
+19. [`RetryableCallout` / `LeadEnrichmentClient`](#19-retryablecallout)
 
 ---
 
@@ -548,3 +553,133 @@ System.enqueueJob(new LeadBackfillJob(leadIds));
 ```
 
 Override `onChainStopped(QueueableChainer nextThatDidNotRun)` if you want to do something (log, write a "resume from here" marker) when the chain stops early due to low headroom instead of silently dropping the remaining work.
+
+---
+
+## 15. Caching
+
+**Files:** [`ICache.cls`](src/classes/ICache.cls), [`PlatformCache.cls`](src/classes/PlatformCache.cls), [`CacheMock.cls`](src/classes/CacheMock.cls), [`CachedRoundRobinAssigner.cls`](src/classes/CachedRoundRobinAssigner.cls)
+
+```apex
+ICache cache = new PlatformCache('local.MyPartition'); // requires that partition provisioned in Setup > Platform Cache
+// or in tests / when no partition is provisioned:
+ICache cache = new CacheMock();
+
+cache.put('someKey', 42);
+cache.put('withTtl', 'value', 300); // expires after 300 seconds (PlatformCache only - CacheMock ignores the ttl)
+Object value = cache.get('someKey');
+Boolean exists = cache.contains('someKey');
+cache.remove('someKey');
+```
+
+### `CachedRoundRobinAssigner` — actually persisting the round-robin index
+
+`RoundRobinAssigner`'s 4-arg overload returns the next resume index but leaves persisting it up to you. `CachedRoundRobinAssigner` does that automatically via any `ICache`:
+
+```apex
+IAssigner assigner = new CachedRoundRobinAssigner(new PlatformCache('local.MyPartition'), 'lead-assignment-index');
+
+assigner.assign(todaysNewLeads, repIds, Lead.OwnerId); // reads the last index, assigns, writes the next one back
+// ... later, a separate transaction ...
+assigner.assign(tomorrowsNewLeads, repIds, Lead.OwnerId); // resumes exactly where the last one left off
+```
+
+Use `new CacheMock()` in place of `PlatformCache` in tests — no partition provisioning needed, and each test method gets a fresh one.
+
+---
+
+## 16. `BatchBase`
+
+**Files:** [`BatchBase.cls`](src/classes/BatchBase.cls), [`LeadReassignmentBatch.cls`](src/classes/LeadReassignmentBatch.cls)
+
+Implement `getQueryLocator()` and `processBatch()`; `start()`/`execute()`/`finish()` and a running `getTotalProcessed()` total are handled for you.
+
+```apex
+public class MyBatch extends BatchBase {
+    protected override Database.QueryLocator getQueryLocator() {
+        return Database.getQueryLocator([SELECT Id FROM Account WHERE ...]);
+    }
+
+    protected override void processBatch(List<SObject> records) {
+        // ... do the work for this chunk ...
+    }
+
+    protected override void onFinish(Integer totalProcessed) {
+        // optional - runs once, after the last chunk, with the grand total
+    }
+}
+
+Database.executeBatch(new MyBatch(), 200);
+```
+
+`LeadReassignmentBatch` is the worked example — re-runs round-robin assignment across every Lead, one chunk at a time, via `UnitOfWork`:
+
+```apex
+Database.executeBatch(new LeadReassignmentBatch(new List<Id>{ repA.Id, repB.Id }), 200);
+```
+
+---
+
+## 17. `WeightedRoundRobinAssigner`
+
+**File:** [`WeightedRoundRobinAssigner.cls`](src/classes/WeightedRoundRobinAssigner.cls)
+
+Same `IAssigner` shape as the other three, but assignees can carry different weights:
+
+```apex
+Map<Id, Integer> weightByRepId = new Map<Id, Integer>{ seniorRep.Id => 2, juniorRep.Id => 1 };
+new WeightedRoundRobinAssigner(weightByRepId).assign(newLeads, new List<Id>{ seniorRep.Id, juniorRep.Id }, Lead.OwnerId);
+// seniorRep gets roughly twice the volume of juniorRep
+```
+
+Any assignee in `assigneeIds` that isn't in the weight map defaults to a weight of 1. Throws `AssignerException` if nobody ends up with a positive weight (same exception the other three assigners use).
+
+---
+
+## 18. `SObjectComparer`
+
+**File:** [`SObjectComparer.cls`](src/classes/SObjectComparer.cls)
+
+```apex
+protected override void afterUpdate(List<SObject> newRecords, Map<Id, SObject> oldRecordsById) {
+    for (SObject newRecord : newRecords) {
+        SObject oldRecord = oldRecordsById.get(newRecord.Id);
+        if (SObjectComparer.hasChanged(oldRecord, newRecord, Lead.OwnerId)) {
+            // ownership changed - react to it
+        }
+    }
+}
+```
+
+For more than one field at once, `getChangedFields` returns the names of everything that differs:
+
+```apex
+Set<String> changedFields = SObjectComparer.getChangedFields(oldRecord, newRecord, new List<Schema.SObjectField>{ Lead.OwnerId, Lead.Status });
+```
+
+---
+
+## 19. `RetryableCallout`
+
+**Files:** [`RetryableCallout.cls`](src/classes/RetryableCallout.cls), [`LeadEnrichmentClient.cls`](src/classes/LeadEnrichmentClient.cls)
+
+Wraps any `ICallout` with retry-on-failure:
+
+```apex
+ICallout resilient = new RetryableCallout(new Callout(), 3); // retries up to 3 attempts on 500/502/503/504
+// or with a custom retryable status set:
+ICallout resilient = new RetryableCallout(new Callout(), 3, new Set<Integer>{ 429, 503 });
+
+HttpResponse response = resilient.send(request);
+```
+
+Retries on both a retryable status code and a thrown exception (e.g. a timeout). Each retry is a real callout when wrapping the real `Callout`, so it spends the transaction's callout limit accordingly - don't set `maxAttempts` higher than your budget allows.
+
+### `LeadEnrichmentClient` — the worked example
+
+```apex
+LeadEnrichmentClient client = new LeadEnrichmentClient('https://api.example.com/company-lookup');
+String industry = client.getIndustryFor(lead.Company); // wrapped in a RetryableCallout by default
+```
+
+Throws `LeadEnrichmentClient.LeadEnrichmentException` on a non-200 response. In tests, inject a `CalloutMock` via the `@testVisible` constructor instead of hitting a real endpoint.

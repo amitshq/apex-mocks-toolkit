@@ -109,6 +109,34 @@ The *original* benchmark's stated motivation was "batch processes / queueable ta
 
 `package.json` has listed `prettier-plugin-apex` as a devDependency since the very first commit, with a `.prettierrc` alongside it, but nothing ever ran it. [`.github/workflows/ci.yml`](.github/workflows/ci.yml) now runs `prettier --check` against every `.cls`/`.trigger` file on every push and PR to `master`. It installs Prettier with `--ignore-scripts` rather than a plain `npm install`, since this repo's `sfdx-cli` devDependency's postinstall script isn't needed for a formatting check and has been observed to fail in some environments.
 
+## Custom additions (round 4)
+
+A fourth pass, split between closing two loose threads left by earlier rounds and adding a few natural extensions of what already exists.
+
+### `ICache` / `PlatformCache` / `CacheMock` — closing a promise made in round 2
+
+[`RoundRobinAssigner`](src/classes/RoundRobinAssigner.cls)'s own doc comment has said since round 2 that callers should "persist that pointer (Platform Cache, a Custom Setting, wherever) across transactions" — nothing in the repo actually did that until now. [`PlatformCache`](src/classes/PlatformCache.cls) wraps a named `Cache.Org` partition (real Platform Cache, requires that partition provisioned in Setup first); [`CacheMock`](src/classes/CacheMock.cls) is a plain in-memory `Map`-backed stand-in needing no such setup. [`CachedRoundRobinAssigner`](src/classes/CachedRoundRobinAssigner.cls) wraps `RoundRobinAssigner` plus an `ICache` to actually read the last index before assigning and write the next one back after — the comment, finally implemented. Covered by [`PlatformCache_Tests.cls`](src/classes/PlatformCache_Tests.cls) (defensive — it skips gracefully rather than hard-failing if no partition is provisioned in the org running the tests), [`CacheMock_Tests.cls`](src/classes/CacheMock_Tests.cls), and [`CachedRoundRobinAssigner_Tests.cls`](src/classes/CachedRoundRobinAssigner_Tests.cls).
+
+### `BatchBase` — the other half of the original benchmark's motivation
+
+The README's origin story cites two things: CPU-intensive transactions (the whole point of the fflib-vs-CrudMock benchmark) and "batch processes / queueable tasks." `QueueableChainer` covered the queueable half in round 3; [`BatchBase`](src/classes/BatchBase.cls) covers `Database.Batchable` — subclasses implement `getQueryLocator()`/`processBatch()`, and `Database.Stateful` tracks a running total across every `execute()` call. [`LeadReassignmentBatch`](src/classes/LeadReassignmentBatch.cls) is the worked example: `Crud` + `UnitOfWork` + `IAssigner` + `BatchBase` together, re-running round-robin assignment across every Lead one chunk at a time. Covered by [`BatchBase_Tests.cls`](src/classes/BatchBase_Tests.cls) and [`LeadReassignmentBatch_Tests.cls`](src/classes/LeadReassignmentBatch_Tests.cls).
+
+### `WeightedRoundRobinAssigner` — a fourth `IAssigner`
+
+Real round-robin distribution is rarely an even split. [`WeightedRoundRobinAssigner`](src/classes/WeightedRoundRobinAssigner.cls) takes a `Map<Id, Integer>` of weights (a rep with weight 2 gets roughly twice the volume of a rep with weight 1; anyone not listed defaults to weight 1) and expands `assigneeIds` into a weighted cycle before round-robining over it. Drop-in alongside the other three — same `IAssigner` shape. Covered by [`WeightedRoundRobinAssigner_Tests.cls`](src/classes/WeightedRoundRobinAssigner_Tests.cls).
+
+### `SObjectComparer` — a field-diff utility
+
+`TriggerHandler.beforeUpdate`/`afterUpdate` have always received `oldRecordsById`, but nothing in this toolkit ever extracted "what actually changed" from it. [`SObjectComparer`](src/classes/SObjectComparer.cls) does exactly that — `getChangedFields(oldRecord, newRecord, fieldsToCompare)` and a single-field `hasChanged(...)` convenience — fully standalone, no schema or DML needed to test it. Covered by [`SObjectComparer_Tests.cls`](src/classes/SObjectComparer_Tests.cls).
+
+### `RetryableCallout` and `LeadEnrichmentClient` — giving `ICallout` a real consumer
+
+`ICallout`/`CalloutMock` shipped in round 3 with no consumer beyond their own tests. [`RetryableCallout`](src/classes/RetryableCallout.cls) wraps any `ICallout` with retry-on-failure (configurable status codes and attempt count — each retry is a real callout when wrapping the real `Callout`, so it spends the transaction's callout limit accordingly); [`LeadEnrichmentClient`](src/classes/LeadEnrichmentClient.cls) is the worked example, an external company-lookup API client wrapped in a `RetryableCallout` by default. Covered by [`RetryableCallout_Tests.cls`](src/classes/RetryableCallout_Tests.cls) and [`LeadEnrichmentClient_Tests.cls`](src/classes/LeadEnrichmentClient_Tests.cls).
+
+### Verified again with the real Apex parser
+
+Same discipline as round 3: every new file in this round was run through `prettier-plugin-apex` before being committed — all 80 classes and 1 trigger in the repo parse cleanly, and the whole codebase (new files included) matches the repo's `.prettierrc`. No new compile errors surfaced this round, but the practice held.
+
 ---
 
 ## Original benchmark write-up (by James Simone)
