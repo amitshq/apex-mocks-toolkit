@@ -2,140 +2,90 @@
 
 Maintained by **Amit Kumar** ([amitgrazitti@gmail.com](mailto:amitgrazitti@gmail.com)).
 
-This repository is a fork/continuation of James Simone's [apex-mocks-stress-test](https://github.com/jamessimone/apex-mocks-stress-test), which originally benchmarked `fflib-apex-mocks` against a hand-rolled `Crud`/`CrudMock` pair. The original benchmark and its write-up (kept below, in his own words, under "Introduction" / "My methodology" / "Result") are his — see [LICENSE](LICENSE) for the MIT terms both his original work and these additions are released under. Everything past that point — the bug fixes, the new test coverage, and the new classes described below — is maintained here going forward.
+This repository is a fork/continuation of James Simone's [apex-mocks-stress-test](https://github.com/jamessimone/apex-mocks-stress-test), which originally benchmarked `fflib-apex-mocks` against a hand-rolled `Crud`/`CrudMock` pair. The original benchmark and its write-up (kept below, in his own words, under "Introduction" / "My methodology" / "Result") are his — see [LICENSE](LICENSE) for the MIT terms both his original work and these additions are released under. Everything past that point has grown into a small CRUD/mocking toolkit, maintained here going forward.
 
-**Looking for how to actually use a class?** See [USAGE.md](USAGE.md) for a per-class developer guide with code examples. This README covers the story and the changelog; USAGE.md is the reference.
+**Looking for how to actually use a class?** See [USAGE.md](USAGE.md) for a per-class developer guide with code examples. This README is the map and the changelog; USAGE.md is the reference.
 
-## What's new in this repository
+## Quick Start
 
-### Bug fixes
+```bash
+git clone https://github.com/amitshq/apex-mocks-toolkit.git
+cd apex-mocks-toolkit
+```
 
-- **`it_should_do_crud_hard_delete` asserted the wrong thing.** [`Crud.doHardDelete`](src/classes/Crud.cls) soft-deletes a record and then permanently purges it via `Database.emptyRecycleBin`. The old test queried `ALL ROWS` afterward and asserted the (nonexistent) row's `IsDeleted` flag — a purged record isn't returned even by `ALL ROWS`, so this would throw `List index out of bounds: 0` on a real run. The test now asserts the record is gone.
-- **`doUpsert(records, externalIdField)` skipped the anti-chunking sort.** Every other bulk method sorts the list first to avoid "too many DML chunks" errors on heterogeneous `SObject` lists; this overload — which specifically supports upserting mixed types that share a common external ID field — didn't. Fixed to sort like the rest.
-- **`Database.emptyRecycleBin` results were discarded.** A failed hard-delete failed silently instead of raising, unlike every other DML call in `Crud`. It now throws a `DmlException` if any record fails to purge.
-- **Cosmetic:** `doUndelete(SObject)` called `doUnDelete` (different casing) internally. Apex is case-insensitive so this ran fine, but it's now consistent.
-- **Edge case:** `TestingUtils.generateId` would pass a negative length to `String.repeat()` if the internal counter ever exceeded 10^12 calls. It now throws a clear `TestingUtilsException` instead of an obscure runtime error (not reachable at the `LARGE_NUMBER` scales used in these tests, but now explicit rather than latent).
-- **Missing exception context:** `CrudMock.RecordsWrapper.singleOrDefault` threw `InvalidOperationException` with no message. It now reports how many records were found.
-- **`package.json` license mismatch:** declared `ISC` while [LICENSE](LICENSE) has always been MIT text. Corrected to `MIT`.
+`fflib-apex-mocks` isn't vendored in this repo (see `.gitignore`) — clone and deploy it separately first, or [`ApexMocksTests.cls`](src/classes/ApexMocksTests.cls) won't compile:
 
-### New concepts added
+```bash
+git clone https://github.com/apex-enterprise-patterns/fflib-apex-mocks.git
+# see that repo's own README for its deploy instructions
+```
 
-- **[`CrudStubProvider`](src/classes/CrudStubProvider.cls) — a third mocking approach.** The original benchmark compared fflib against `CrudMock`; this adds Salesforce's own built-in `System.StubProvider`/`Test.createStub` API as a third contender, with a matching `nativestub_should_mock_dml_statements_update` benchmark test in [`ApexMocksTests.cls`](src/classes/ApexMocksTests.cls). It's a useful baseline: no external library, no custom recording pattern, just the platform's native stubbing.
-- **[`IUnitOfWork`](src/classes/IUnitOfWork.cls) / [`UnitOfWork`](src/classes/UnitOfWork.cls) — batched DML.** A small Unit of Work implementation (`registerNew`/`registerDirty`/`registerDeleted`/`commitWork`) that sits on top of `ICrud`, so code can accumulate changes across a transaction and flush them as one insert/update/delete each, instead of scattering direct DML calls. It takes any `ICrud` in its constructor — `new Crud()` for real DML, `CrudMock.getMock()` in tests — so it composes with everything already in this repo. Covered by [`UnitOfWork_Tests.cls`](src/classes/UnitOfWork_Tests.cls).
-- **Assignment strategies — [`IAssigner`](src/classes/IAssigner.cls) with three implementations.** A common pattern in Salesforce orgs is distributing incoming records (Leads, Cases, ...) across a pool of owners. Rather than one hardcoded round-robin, this is a small Strategy-pattern toolkit:
-  - **[`RoundRobinAssigner`](src/classes/RoundRobinAssigner.cls)** — cycles through `assigneeIds` in order, wrapping around. Its 4-arg overload returns the index the next batch should resume from, so callers can persist that pointer (Platform Cache, a Custom Setting, wherever) across transactions instead of always restarting at 0.
-  - **[`RandomAssigner`](src/classes/RandomAssigner.cls)** — assigns each record to a uniformly random assignee. No ordering guarantee, but simple and stateless.
-  - **[`LoadBalancedAssigner`](src/classes/LoadBalancedAssigner.cls)** — assigns each record to whichever assignee currently holds the fewest records, tracking a running count as it goes. Seed it with real starting loads (e.g. open-case counts from a query) via its constructor, and read `getCurrentLoad()` afterward.
+Then deploy this repo (it uses the classic metadata-API layout — `src/package.xml` alongside `src/classes`, `src/triggers`, `src/objects`) and run its tests:
 
-  All three share one call shape — `assigner.assign(records, assigneeIds, ownerField)` — so they're drop-in replacements for each other. Covered by [`RoundRobinAssigner_Tests.cls`](src/classes/RoundRobinAssigner_Tests.cls), [`RandomAssigner_Tests.cls`](src/classes/RandomAssigner_Tests.cls), and [`LoadBalancedAssigner_Tests.cls`](src/classes/LoadBalancedAssigner_Tests.cls).
+```bash
+sf org login web --alias yourOrgAlias
+sf project deploy start --metadata-dir src --target-org yourOrgAlias
+sf apex run test --test-level RunLocalTests --target-org yourOrgAlias --result-format human --synchronous
+```
 
-  ```apex
-  List<Id> repIds = new List<Id>{ repA.Id, repB.Id, repC.Id };
-  new RoundRobinAssigner().assign(newLeads, repIds, Lead.OwnerId);
-  new Crud().doInsert(newLeads);
-  ```
+`ApexMocksTests.cls`'s `LARGE_NUMBER` constant defaults to `10000`; the dramatic `System.LimitException` results in the original write-up further down used 100,000–1,000,000 — bump it yourself to reproduce those.
 
-### Test coverage added
+## What's in this toolkit
 
-`TestingUtils`, `TypeUtils`, and most of `CrudMock`'s `RecordsWrapper` API (`ofType`/`Accounts`/`Contacts`/`Leads`/`Opportunities`/`Tasks`, `hasId`, `singleOrDefault`, `firstOrDefault`) had no dedicated tests. Added `TestingUtils_Tests.cls`, `TypeUtils_Tests.cls`, and `CrudMock_Tests.cls`. The new `UnitOfWork` and assignment-strategy classes each ship with their own test class (`UnitOfWork_Tests`, `RoundRobinAssigner_Tests`, `RandomAssigner_Tests`, `LoadBalancedAssigner_Tests`) rather than being added untested.
+| Category | Classes | What it does |
+| --- | --- | --- |
+| CRUD | `ICrud`, `Crud`, `CrudMock`, `SecureCrud` | Mockable DML; `SecureCrud` adds FLS/CRUD enforcement |
+| Queries | `ISelector`, `Selector`, `AccountsSelector`, `SelectorMock` | Mockable SOQL — the read-side mirror of CRUD |
+| Callouts | `ICallout`, `Callout`, `CalloutMock`, `RetryableCallout`, `LeadEnrichmentClient` | Mockable HTTP callouts, with retry/backoff and a worked API-client example |
+| Platform Events | `IEventPublisher`, `EventPublisher`, `EventPublisherMock`, `Lead_Assigned__e` | Mockable `EventBus.publish()` |
+| Unit of Work | `IUnitOfWork`, `UnitOfWork` | Batches DML into one insert/update/delete per commit |
+| Assignment | `IAssigner`, `RoundRobinAssigner`, `RandomAssigner`, `LoadBalancedAssigner`, `WeightedRoundRobinAssigner`, `CachedRoundRobinAssigner` | Interchangeable record-assignment strategies |
+| Domain & validation | `IDomain`, `Domain`, `LeadsDomain`, `IValidationRule`, `Validator`, `RequiredFieldRule` | Record-level business rules, two composition styles |
+| Factory | `Application` | One place every mock above gets swapped in tests |
+| Trigger framework | `TriggerHandler`, `LeadTriggerHandler`, `LeadAssignmentConfig`, `LeadTrigger.trigger` | Dispatch base class + a worked example composing several rows above |
+| Batch & async | `BatchBase`, `LeadReassignmentBatch`, `QueueableChainer` | `Database.Batchable`/`Queueable` helpers |
+| Caching | `ICache`, `PlatformCache`, `CacheMock` | Mockable Platform Cache |
+| Governor limits | `GovernorLimitGuard` | Proactive `Limits.*` checks instead of a thrown `System.LimitException` |
+| Test data & utilities | `TestingUtils`, `TypeUtils`, `SObjectComparer` | Fake IDs, dynamic Apex, field-diffing |
+| Benchmarking | `Stopwatch`, `CrudStubProvider`, `ApexMocksTests` | CPU timing, a native-stub mock, and the fflib-vs-CrudMock benchmark suite itself |
 
-### Metadata
+Every class above ships with its own `*_Tests.cls` (not listed individually here — see [USAGE.md](USAGE.md) for what each one covers). 80 classes, 1 trigger, 1 Platform Event, all on API 67.0.
 
-All classes were pinned to API version 47.0 (Winter '20, ~6 years old). Bumped to 67.0 across every `-meta.xml` and `src/package.xml`.
+## Changelog
 
-### Still worth knowing
+<details>
+<summary><strong>Round 1</strong> — bug fixes, API version bump, first new classes</summary>
 
-- `fflib-apex-mocks` is **not vendored** in this repo (see `.gitignore`) — per the methodology below, clone it separately before deploying, or `ApexMocksTests.cls` won't compile.
-- `LARGE_NUMBER` in `ApexMocksTests.cls` defaults to `10000`. The dramatic results tables further down used 100,000–1,000,000; bump the constant yourself to reproduce those.
-- `UnitOfWork` delegates to whatever `ICrud` it's given — pair it with `SecureCrud` (below) if you want FLS/CRUD enforcement on the writes it batches.
+**Fixed:** the hard-delete test asserting against a permanently-purged record; a missing anti-chunking sort on `doUpsert(records, externalIdField)`; silently-discarded `Database.emptyRecycleBin` failures; a `doUndelete`/`doUnDelete` casing inconsistency; an unguarded `String.repeat()` edge case in `TestingUtils.generateId`; a message-less `CrudMock.InvalidOperationException`; and a `package.json` license field that said `ISC` while [LICENSE](LICENSE) has always been MIT.
 
-## Custom additions (round 2)
+**Added:** `CrudStubProvider` (native `Test.createStub` as a third mocking approach), `UnitOfWork`, and the `IAssigner` trio (`RoundRobinAssigner`/`RandomAssigner`/`LoadBalancedAssigner`). Added missing test coverage for `TestingUtils`, `TypeUtils`, and `CrudMock.RecordsWrapper`. Bumped every class from API 47.0 (Winter '20) to 67.0.
 
-A second pass adding a handful of small, focused utilities — each closes a specific gap noted above rather than being generic filler.
+</details>
 
-### `SecureCrud` — closes the FLS/CRUD gap
+<details>
+<summary><strong>Round 2</strong> — SecureCrud, the trigger framework, Selector layer</summary>
 
-[`SecureCrud`](src/classes/SecureCrud.cls) extends `Crud` and runs `Security.stripInaccessible` before every insert/update/upsert, and checks object-level delete access before delete/hard delete — a drop-in `ICrud` implementation, so anything already coded against the interface (including `UnitOfWork`) gets FLS enforcement for free by swapping `new Crud()` for `new SecureCrud()`. The most recent `SObjectAccessDecision` is exposed via `getLastAccessDecision()` for inspection. Covered by [`SecureCrud_Tests.cls`](src/classes/SecureCrud_Tests.cls), including a deterministic, org-independent test of the delete guard (Users can never be deleted via the API, so that's used to exercise the "not deletable" branch without needing a custom permission set).
+**Added:** `SecureCrud` (FLS/CRUD enforcement, drop-in `ICrud`); `TriggerHandler` + `LeadTriggerHandler` (the first worked example composing `Crud`/`UnitOfWork`/`IAssigner`, wired to a real `LeadTrigger.trigger`); the Selector layer (`ISelector`/`Selector`/`AccountsSelector`/`SelectorMock`, the read-side mirror of CRUD); `GovernorLimitGuard`; and `Stopwatch`.
 
-### A worked example — `TriggerHandler` + `LeadTriggerHandler`
+</details>
 
-Until now, `Crud`, `UnitOfWork`, and the `IAssigner`s were independent utilities with nothing showing them composed. [`TriggerHandler`](src/classes/TriggerHandler.cls) is a minimal trigger dispatch base class (before/after insert/update/delete, after undelete); [`LeadTriggerHandler`](src/classes/LeadTriggerHandler.cls) extends it to round-robin assign every new Lead across [`LeadAssignmentConfig.salesRepIds`](src/classes/LeadAssignmentConfig.cls) in `beforeInsert`, then queues a follow-up `Task` for the new owner through `UnitOfWork` in `afterInsert` — `Crud` + `UnitOfWork` + `IAssigner` in one realistic flow. It's wired to a real [`LeadTrigger.trigger`](src/triggers/LeadTrigger.trigger), so `package.xml` now also declares the `ApexTrigger` metadata type. Both hooks are `@testVisible`, so [`LeadTriggerHandler_Tests.cls`](src/classes/LeadTriggerHandler_Tests.cls) covers the logic directly (fast, no real DML) as well as end-to-end (a real Lead insert, using the running test user as the only "rep" so the test stays portable across orgs).
+<details>
+<summary><strong>Round 3</strong> — Callouts, Application factory, Domain/Validator, Platform Events, CI</summary>
 
-### Selector layer — the missing "R" in CRUD
+**Added:** the Callout layer (`ICallout`/`Callout`/`CalloutMock`, no `Test.setMock` ceremony needed when mocking); `Application` (a factory/service-locator tying every mock together behind one override point); the Domain layer (`IDomain`/`Domain`/`LeadsDomain`); composable validation (`IValidationRule`/`Validator`/`RequiredFieldRule`); mockable Platform Events (`IEventPublisher`/`EventPublisher`/`EventPublisherMock`, backed by a real `Lead_Assigned__e` — the repo's first non-Apex-class metadata); and `QueueableChainer`.
 
-[`ISelector`](src/classes/ISelector.cls)/[`Selector`](src/classes/Selector.cls) mirror `ICrud`/`Crud` for reads: a subclass declares its `SObjectType` and fields, the base class builds and runs the query. [`AccountsSelector`](src/classes/AccountsSelector.cls) is the one worked example; [`SelectorMock`](src/classes/SelectorMock.cls) is the `CrudMock` counterpart — seed it with canned records, and `selectById` returns matches with no SOQL, tracking a call count the same way `CrudMock`'s lists do. Covered by [`AccountsSelector_Tests.cls`](src/classes/AccountsSelector_Tests.cls) and [`SelectorMock_Tests.cls`](src/classes/SelectorMock_Tests.cls). A natural next step (not done here) would be extending the fflib-vs-custom-mock benchmark to selectors the same way `ApexMocksTests` already does for DML.
+**Also:** ran the whole codebase through `prettier-plugin-apex` for the first time (a devDependency since commit one, never used) — it caught a genuine, previously-undetected compile error (`GovernorLimitGuard.percentUsed` had a parameter named `limit`, a reserved word in Apex), now fixed. Added [`.github/workflows/ci.yml`](.github/workflows/ci.yml) to run that check on every push/PR going forward.
 
-### `GovernorLimitGuard` — a nod to the repo's origin story
+</details>
 
-This whole project exists because fflib mocking once ran a transaction into `System.LimitException`. [`GovernorLimitGuard`](src/classes/GovernorLimitGuard.cls) makes that checkable instead of something you discover via a thrown exception: `getDmlRowsPercentUsed()`/`getCpuTimePercentUsed()`/etc. read current usage as a percentage, and `throwIfDmlRowsNear(threshold)`-style guards let calling code bail out proactively. Covered by [`GovernorLimitGuard_Tests.cls`](src/classes/GovernorLimitGuard_Tests.cls).
+<details>
+<summary><strong>Round 4</strong> — Caching, Batchable, a fourth Assigner, field diffing, callout retries</summary>
 
-### `Stopwatch` — formalizing the benchmark methodology
+**Added:** `ICache`/`PlatformCache`/`CacheMock` plus `CachedRoundRobinAssigner` — actually implements the "persist the resume index" comment `RoundRobinAssigner` had carried since round 2; `BatchBase` + `LeadReassignmentBatch` — the `Database.Batchable` half of the original benchmark's "batch processes" motivation (`QueueableChainer` only covered the queueable half); `WeightedRoundRobinAssigner` — a fourth `IAssigner`, for uneven volume splits; `SObjectComparer` — a standalone field-diff utility for `TriggerHandler`'s update hooks; and `RetryableCallout` + `LeadEnrichmentClient` — retry/backoff on `ICallout`, plus the worked example that layer was missing.
 
-The original benchmark methodology was "run the tests, eyeball the debug log" (that's literally how the Run 1–10 tables below were produced). [`Stopwatch`](src/classes/Stopwatch.cls) wraps `Limits.getCpuTime()` so a test can report a number instead: `start()`/`stop()`, then `getElapsedCpuTimeMillis()`. `ApexMocksTests.cls` now has `it_should_report_cpu_time_for_crudmock_vs_fflib_side_by_side`, which measures both approaches with it directly. Covered by [`Stopwatch_Tests.cls`](src/classes/Stopwatch_Tests.cls).
+**Also:** re-verified all 80 classes with `prettier-plugin-apex` before committing — zero parse errors.
 
-## Custom additions (round 3)
-
-A third pass — covering the two remaining "hard to test" surfaces (outbound callouts, Platform Events), a factory tying every mock together, and a couple of composable patterns for validation and business rules.
-
-### `ICallout` / `Callout` / `CalloutMock` — the third native mocking story
-
-DML has `ICrud`/`CrudMock`, queries have `ISelector`/`SelectorMock` — [`ICallout`](src/classes/ICallout.cls)/[`Callout`](src/classes/Callout.cls) complete the trio for outbound HTTP callouts. [`CalloutMock`](src/classes/CalloutMock.cls) configures canned `HttpResponse`s per endpoint (or a catch-all default) and records every sent request, with no `Test.setMock`/`HttpCalloutMock` ceremony needed in consuming code — a real callout never happens when the mock is used. `Callout` itself (the real implementation) is still tested the standard Apex way, with `Test.setMock`. Covered by [`Callout_Tests.cls`](src/classes/Callout_Tests.cls) and [`CalloutMock_Tests.cls`](src/classes/CalloutMock_Tests.cls).
-
-### `Application` — one place every mock gets swapped
-
-Until now, mocking anything meant manually injecting `CrudMock`/`SelectorMock`/etc. into each constructor by hand. [`Application`](src/classes/Application.cls) is a small factory/service-locator (the same idea fflib calls `Application`): `Application.Crud.newInstance()`, `Application.Selector.newInstance(Account.SObjectType)`, `Application.Callout.newInstance()`, `Application.UnitOfWork.newInstance()`, and `Application.EventPublisher.newInstance()` return the real implementation by default, or a test-configured mock (`Application.Crud.setMock(new CrudMock())`) when one's been set. `LeadTriggerHandler`'s default constructor now goes through `Application.UnitOfWork.newInstance()` instead of `new UnitOfWork()` directly, so this isn't just theoretical. Covered by [`Application_Tests.cls`](src/classes/Application_Tests.cls).
-
-### `IDomain` / `Domain` — completing the Service/Domain/Selector trio
-
-[`Domain`](src/classes/Domain.cls) is the classic `fflib_SObjectDomain` idea, kept to one method: subclasses wrap a `List<SObject>` of one type and implement `validateRecord()`; `validate()` collects every error across every record and throws once with a combined message, rather than failing on the first bad record. [`LeadsDomain`](src/classes/LeadsDomain.cls) is the worked example (a Lead needs a `Company`). It's intentionally **not** wired into `LeadTriggerHandler` this round — throwing a bare exception from a trigger produces an ugly unhandled error rather than a clean validation message (real usage would call `SObject.addError()` instead), and composing that properly felt like its own follow-up rather than something to bolt on here. Covered by [`LeadsDomain_Tests.cls`](src/classes/LeadsDomain_Tests.cls).
-
-### `IValidationRule` / `Validator` — composable rules, a different axis than `Domain`
-
-Where `Domain` is one hardcoded class per SObject type, [`IValidationRule`](src/classes/IValidationRule.cls)/[`Validator`](src/classes/Validator.cls) is a runtime rule list that mixes and matches across *any* type. [`RequiredFieldRule`](src/classes/RequiredFieldRule.cls) is the one rule provided — `new RequiredFieldRule(Lead.Company)` works identically against `Lead`, `Account`, or any other SObject, which is the whole point of pulling rules out into their own reusable classes instead of hardcoding them per domain. Covered by [`Validator_Tests.cls`](src/classes/Validator_Tests.cls) and [`RequiredFieldRule_Tests.cls`](src/classes/RequiredFieldRule_Tests.cls).
-
-### `IEventPublisher` / `EventPublisher` / `EventPublisherMock` — mockable Platform Events
-
-Testing Platform Event publishers in Apex is a known pain point (`Test.getEventBus().deliver()` gymnastics). [`EventPublisher`](src/classes/EventPublisher.cls) wraps `EventBus.publish()` behind [`IEventPublisher`](src/classes/IEventPublisher.cls), mirroring `ICrud`; [`EventPublisherMock`](src/classes/EventPublisherMock.cls) records published events in memory instead. This is also the first non-Apex-class metadata in the repo: a real Platform Event, [`Lead_Assigned__e`](src/objects/Lead_Assigned__e.object) (`Lead_Id__c`, `Assignee_Id__c`), so `EventPublisher_Tests.cls` can publish for real rather than only against a mock. `package.xml` now also declares the `CustomObject` metadata type. Covered by [`EventPublisher_Tests.cls`](src/classes/EventPublisher_Tests.cls) and [`EventPublisherMock_Tests.cls`](src/classes/EventPublisherMock_Tests.cls).
-
-### `QueueableChainer` — giving `GovernorLimitGuard` a real caller
-
-The *original* benchmark's stated motivation was "batch processes / queueable tasks which process large numbers of records," but nothing in the toolkit demonstrated chaining Queueables safely. [`QueueableChainer`](src/classes/QueueableChainer.cls) is a `Queueable` base class whose `execute()` runs the current link (`run()`), then only enqueues the next one (`getNext()`) if [`GovernorLimitGuard.throwIfQueueableJobsNear(90)`](src/classes/GovernorLimitGuard.cls) confirms there's headroom — otherwise it calls `onChainStopped()` instead of risking a `System.LimitException: Too many queueable jobs added`. `GovernorLimitGuard` picked up `getQueueableJobsPercentUsed()`/`throwIfQueueableJobsNear()` alongside its existing DML/query/CPU/heap checks to support this. Covered by [`QueueableChainer_Tests.cls`](src/classes/QueueableChainer_Tests.cls).
-
-### Verified with a real Apex parser, not just reviewed by hand
-
-`prettier-plugin-apex` (already a devDependency, previously unused — see CI below) turned out to be more than a formatter: it's built on a real Apex parser, and running it against every class in this repo caught a genuine, previously-undetected compile error — `GovernorLimitGuard.percentUsed` had a parameter named `limit`, which is a reserved word in Apex (part of the SOQL `LIMIT` clause grammar). That's now fixed, and every one of the 62 Apex files in this repo (61 classes + the trigger) has been confirmed to actually parse. The whole codebase was also run through `prettier --write` to match the `.prettierrc` this repo already declared but never used.
-
-### CI — actually running the Prettier config that was just sitting there
-
-`package.json` has listed `prettier-plugin-apex` as a devDependency since the very first commit, with a `.prettierrc` alongside it, but nothing ever ran it. [`.github/workflows/ci.yml`](.github/workflows/ci.yml) now runs `prettier --check` against every `.cls`/`.trigger` file on every push and PR to `master`. It installs Prettier with `--ignore-scripts` rather than a plain `npm install`, since this repo's `sfdx-cli` devDependency's postinstall script isn't needed for a formatting check and has been observed to fail in some environments.
-
-## Custom additions (round 4)
-
-A fourth pass, split between closing two loose threads left by earlier rounds and adding a few natural extensions of what already exists.
-
-### `ICache` / `PlatformCache` / `CacheMock` — closing a promise made in round 2
-
-[`RoundRobinAssigner`](src/classes/RoundRobinAssigner.cls)'s own doc comment has said since round 2 that callers should "persist that pointer (Platform Cache, a Custom Setting, wherever) across transactions" — nothing in the repo actually did that until now. [`PlatformCache`](src/classes/PlatformCache.cls) wraps a named `Cache.Org` partition (real Platform Cache, requires that partition provisioned in Setup first); [`CacheMock`](src/classes/CacheMock.cls) is a plain in-memory `Map`-backed stand-in needing no such setup. [`CachedRoundRobinAssigner`](src/classes/CachedRoundRobinAssigner.cls) wraps `RoundRobinAssigner` plus an `ICache` to actually read the last index before assigning and write the next one back after — the comment, finally implemented. Covered by [`PlatformCache_Tests.cls`](src/classes/PlatformCache_Tests.cls) (defensive — it skips gracefully rather than hard-failing if no partition is provisioned in the org running the tests), [`CacheMock_Tests.cls`](src/classes/CacheMock_Tests.cls), and [`CachedRoundRobinAssigner_Tests.cls`](src/classes/CachedRoundRobinAssigner_Tests.cls).
-
-### `BatchBase` — the other half of the original benchmark's motivation
-
-The README's origin story cites two things: CPU-intensive transactions (the whole point of the fflib-vs-CrudMock benchmark) and "batch processes / queueable tasks." `QueueableChainer` covered the queueable half in round 3; [`BatchBase`](src/classes/BatchBase.cls) covers `Database.Batchable` — subclasses implement `getQueryLocator()`/`processBatch()`, and `Database.Stateful` tracks a running total across every `execute()` call. [`LeadReassignmentBatch`](src/classes/LeadReassignmentBatch.cls) is the worked example: `Crud` + `UnitOfWork` + `IAssigner` + `BatchBase` together, re-running round-robin assignment across every Lead one chunk at a time. Covered by [`BatchBase_Tests.cls`](src/classes/BatchBase_Tests.cls) and [`LeadReassignmentBatch_Tests.cls`](src/classes/LeadReassignmentBatch_Tests.cls).
-
-### `WeightedRoundRobinAssigner` — a fourth `IAssigner`
-
-Real round-robin distribution is rarely an even split. [`WeightedRoundRobinAssigner`](src/classes/WeightedRoundRobinAssigner.cls) takes a `Map<Id, Integer>` of weights (a rep with weight 2 gets roughly twice the volume of a rep with weight 1; anyone not listed defaults to weight 1) and expands `assigneeIds` into a weighted cycle before round-robining over it. Drop-in alongside the other three — same `IAssigner` shape. Covered by [`WeightedRoundRobinAssigner_Tests.cls`](src/classes/WeightedRoundRobinAssigner_Tests.cls).
-
-### `SObjectComparer` — a field-diff utility
-
-`TriggerHandler.beforeUpdate`/`afterUpdate` have always received `oldRecordsById`, but nothing in this toolkit ever extracted "what actually changed" from it. [`SObjectComparer`](src/classes/SObjectComparer.cls) does exactly that — `getChangedFields(oldRecord, newRecord, fieldsToCompare)` and a single-field `hasChanged(...)` convenience — fully standalone, no schema or DML needed to test it. Covered by [`SObjectComparer_Tests.cls`](src/classes/SObjectComparer_Tests.cls).
-
-### `RetryableCallout` and `LeadEnrichmentClient` — giving `ICallout` a real consumer
-
-`ICallout`/`CalloutMock` shipped in round 3 with no consumer beyond their own tests. [`RetryableCallout`](src/classes/RetryableCallout.cls) wraps any `ICallout` with retry-on-failure (configurable status codes and attempt count — each retry is a real callout when wrapping the real `Callout`, so it spends the transaction's callout limit accordingly); [`LeadEnrichmentClient`](src/classes/LeadEnrichmentClient.cls) is the worked example, an external company-lookup API client wrapped in a `RetryableCallout` by default. Covered by [`RetryableCallout_Tests.cls`](src/classes/RetryableCallout_Tests.cls) and [`LeadEnrichmentClient_Tests.cls`](src/classes/LeadEnrichmentClient_Tests.cls).
-
-### Verified again with the real Apex parser
-
-Same discipline as round 3: every new file in this round was run through `prettier-plugin-apex` before being committed — all 80 classes and 1 trigger in the repo parse cleanly, and the whole codebase (new files included) matches the repo's `.prettierrc`. No new compile errors surfaced this round, but the practice held.
+</details>
 
 ---
 
